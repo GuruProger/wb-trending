@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -29,6 +30,9 @@ type RingBufferStorage struct {
 
 	// Стоп-лист для фильтрации нежелательных запросов
 	stopList *StopList
+
+	// Анти-бот для защиты от накруток
+	antiBot *AntiBot
 }
 
 type cachedEntry struct {
@@ -55,13 +59,22 @@ func NewRingBufferStorage(windowSize, bucketSize time.Duration) *RingBufferStora
 		bucketCount: bucketCount,
 		aggregated:  make(map[string]int),
 		cacheTTL:    500 * time.Millisecond,
-		stopList:    NewStopList(), // Инициализируем стоп-лист
+
+		stopList: NewStopList(),
+		// Кэш на 100000 пар, 1 токен, восстановление за 10 секунд
+		antiBot: NewAntiBot(100000, 1, 10*time.Second),
 	}
 }
-
 func (s *RingBufferStorage) Add(event models.SearchEvent) {
 	// Проверяем стоп-лист перед добавлением
 	if s.stopList.IsBlocked(event.Query) {
+		log.Printf("Заблокировано стоп-листом: query='%s', user='%s'", event.Query, event.UserID)
+		return
+	}
+
+	// Проверяем анти-бот: если это накрутка, игнорируем запрос
+	if !s.antiBot.Allow(event.UserID, event.Query) {
+		log.Printf("Отфильтровано анти-ботом: query='%s', user='%s'", event.Query, event.UserID)
 		return
 	}
 

@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/go-chi/chi/v5 v5.3.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/segmentio/kafka-go v0.4.51
 )
 
