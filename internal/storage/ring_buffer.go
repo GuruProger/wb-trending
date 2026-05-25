@@ -13,17 +13,12 @@ type Bucket struct {
 	Queries   map[string]int
 }
 
-// RingBufferStorage использует кольцевой буфер для хранения данных за последние 5 минут.
-// Вместо хранения каждого события отдельно, мы разбиваем время на 1-секундные интервалы.
-// Получаем быстрое очищение устаревших данных и эффективное использование памяти.
 type RingBufferStorage struct {
 	mu sync.RWMutex
 
 	buckets     []*Bucket
 	bucketCount int
 
-	// Глобальный счетчик всех запросов за текущее окно.
-	// Обновляется при каждом добавлении события, чтобы не пересчитывать топ с нуля.
 	aggregated map[string]int
 
 	currentSecond int64
@@ -31,6 +26,9 @@ type RingBufferStorage struct {
 	cachedTop       []cachedEntry
 	cacheValidUntil time.Time
 	cacheTTL        time.Duration
+
+	// Стоп-лист для фильтрации нежелательных запросов
+	stopList *StopList
 }
 
 type cachedEntry struct {
@@ -57,10 +55,16 @@ func NewRingBufferStorage(windowSize, bucketSize time.Duration) *RingBufferStora
 		bucketCount: bucketCount,
 		aggregated:  make(map[string]int),
 		cacheTTL:    500 * time.Millisecond,
+		stopList:    NewStopList(), // Инициализируем стоп-лист
 	}
 }
 
 func (s *RingBufferStorage) Add(event models.SearchEvent) {
+	// Проверяем стоп-лист перед добавлением
+	if s.stopList.IsBlocked(event.Query) {
+		return
+	}
+
 	eventSecond := event.Timestamp / 1000
 
 	s.mu.Lock()
@@ -70,24 +74,26 @@ func (s *RingBufferStorage) Add(event models.SearchEvent) {
 		s.currentSecond = eventSecond
 	}
 
-	// Событие пришло слишком поздно (старше 5 минут) - игнорируем
 	if eventSecond < s.currentSecond-int64(s.bucketCount) {
 		return
 	}
 
-	// Событие из прошлого (в пределах окна) - добавляем в нужный интервал
 	if eventSecond < s.currentSecond {
 		s.incrementBucket(eventSecond, event.Query)
 		return
 	}
 
-	// Событие из будущего - очищаем все промежутки между текущим и новым временем
 	for sec := s.currentSecond + 1; sec <= eventSecond; sec++ {
 		s.moveToNewBucket(sec)
 	}
 	s.currentSecond = eventSecond
 
 	s.incrementBucket(eventSecond, event.Query)
+}
+
+// GetStopList возвращает ссылку на стоп-лист для управления из API
+func (s *RingBufferStorage) GetStopList() *StopList {
+	return s.stopList
 }
 
 func (s *RingBufferStorage) incrementBucket(second int64, query string) {
