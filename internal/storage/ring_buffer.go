@@ -159,6 +159,21 @@ func (s *RingBufferStorage) copyTopLocked(limit int) []string {
 
 func (s *RingBufferStorage) rebuildCache(limit int) []string {
 	s.mu.Lock()
+
+	// Очищаем устаревшие бакеты перед агрегацией
+	currentTime := time.Now().Unix()
+	cutoffTime := currentTime - int64(s.bucketCount)
+
+	// Продвигаем currentSecond вперед, если прошло много времени без событий
+	if currentTime > s.currentSecond {
+		for sec := s.currentSecond + 1; sec <= currentTime; sec++ {
+			if sec > cutoffTime {
+				s.moveToNewBucket(sec)
+			}
+		}
+		s.currentSecond = currentTime
+	}
+
 	snapshot := make(map[string]int, len(s.aggregated))
 	for q, c := range s.aggregated {
 		snapshot[q] = c
