@@ -3,6 +3,7 @@ package consumer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"time"
 
@@ -56,6 +57,12 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 			continue
 		}
 
+		// Валидируем и нормализуем событие перед обработкой.
+		// Делаем это до замера лага, чтобы не искажать метрику невалидными данными.
+		if !c.validateAndNormalize(&event) {
+			continue
+		}
+
 		// Измеряем лаг - разницу между timestamp события и временем его обработки.
 		// Если эта метрика растёт, значит consumer не успевает за потоком.
 		lag := time.Since(time.UnixMilli(event.Timestamp)).Seconds()
@@ -69,6 +76,30 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 		c.storage.Add(event)
 		metrics.ConsumerProcessingDuration.Observe(time.Since(start).Seconds())
 	}
+}
+
+// validateAndNormalize проверяет обязательные поля события и нормализует их при необходимости.
+// Возвращает false, если событие нужно отбросить (например, пустой query).
+func (c *KafkaConsumer) validateAndNormalize(event *models.SearchEvent) bool {
+	// Пустой запрос не имеет смысла для топа - отбрасываем.
+	// Без этого в агрегатор может попасть пустая строка, что сломает сортировку.
+	if event.Query == "" {
+		metrics.EventsProcessedTotal.WithLabelValues("invalid_query").Inc()
+		return false
+	}
+
+	// Если timestamp невалидный (например, смежный сервис не проставил его), используем текущее время.
+	// Это лучше, чем отбрасывать событие целиком, потому что сам факт поиска важен для топа.
+	if event.Timestamp <= 0 {
+		event.Timestamp = time.Now().UnixMilli()
+	}
+
+	//Присваиваем id для пользователя без id
+	if event.UserID == "" {
+		event.UserID = fmt.Sprintf("anon-%d", time.Now().UnixNano())
+	}
+
+	return true
 }
 
 // Stop закрывает соединение с Kafka.
