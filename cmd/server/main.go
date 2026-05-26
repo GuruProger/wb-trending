@@ -16,6 +16,9 @@ import (
 	"github.com/GuruProger/wb-trending/internal/storage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
+	_ "github.com/GuruProger/wb-trending/internal/metrics"
 )
 
 func main() {
@@ -34,12 +37,22 @@ func main() {
 
 	// Настройка HTTP роутера
 	r := chi.NewRouter()
+
+	// Порядок middleware важен
+	// MetricsMiddleware ставится первым (самым внешним),
+	// чтобы замерять полное время ответа сервера, включая все нижележащие слои.
+	r.Use(api.MetricsMiddleware)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(10 * time.Second))
 
 	handler := api.NewHandler(store)
 	handler.RegisterRoutes(r)
+
+	// Эндпоинт для Prometheus.
+	// promhttp.Handler() автоматически экспортирует все зарегистрированные метрики
+	// плюс стандартные Go runtime метрики (goroutines, память, GC).
+	r.Handle("/metrics", promhttp.Handler())
 
 	server := &http.Server{
 		Addr:         ":" + cfg.Server.Port,

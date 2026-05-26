@@ -1,11 +1,11 @@
 package storage
 
 import (
-	"log"
 	"sort"
 	"sync"
 	"time"
 
+	"github.com/GuruProger/wb-trending/internal/metrics"
 	"github.com/GuruProger/wb-trending/internal/models"
 )
 
@@ -21,6 +21,8 @@ type RingBufferStorage struct {
 	bucketCount int
 
 	aggregated map[string]int
+
+	totalEvents int64 // Сумма всех count в агрегаторе, для метрики TotalEventsCount
 
 	currentSecond int64
 
@@ -65,16 +67,17 @@ func NewRingBufferStorage(windowSize, bucketSize time.Duration) *RingBufferStora
 		antiBot: NewAntiBot(100000, 1, 10*time.Second),
 	}
 }
+
 func (s *RingBufferStorage) Add(event models.SearchEvent) {
 	// Проверяем стоп-лист перед добавлением
 	if s.stopList.IsBlocked(event.Query) {
-		log.Printf("Заблокировано стоп-листом: query='%s', user='%s'", event.Query, event.UserID)
+		metrics.EventsProcessedTotal.WithLabelValues("blocked_stoplist").Inc()
 		return
 	}
 
 	// Проверяем анти-бот: если это накрутка, игнорируем запрос
 	if !s.antiBot.Allow(event.UserID, event.Query) {
-		log.Printf("Отфильтровано анти-ботом: query='%s', user='%s'", event.Query, event.UserID)
+		metrics.EventsProcessedTotal.WithLabelValues("blocked_antibot").Inc()
 		return
 	}
 
@@ -87,12 +90,15 @@ func (s *RingBufferStorage) Add(event models.SearchEvent) {
 		s.currentSecond = eventSecond
 	}
 
+	// Событие старше скользящего окна - игнорируем
 	if eventSecond < s.currentSecond-int64(s.bucketCount) {
+		metrics.EventsProcessedTotal.WithLabelValues("outdated").Inc()
 		return
 	}
 
 	if eventSecond < s.currentSecond {
 		s.incrementBucket(eventSecond, event.Query)
+		metrics.EventsProcessedTotal.WithLabelValues("accepted").Inc()
 		return
 	}
 
@@ -102,6 +108,7 @@ func (s *RingBufferStorage) Add(event models.SearchEvent) {
 	s.currentSecond = eventSecond
 
 	s.incrementBucket(eventSecond, event.Query)
+	metrics.EventsProcessedTotal.WithLabelValues("accepted").Inc()
 }
 
 // GetStopList возвращает ссылку на стоп-лист для управления из API
@@ -109,6 +116,8 @@ func (s *RingBufferStorage) GetStopList() *StopList {
 	return s.stopList
 }
 
+// incrementBucket добавляет событие в бакет и обновляет глобальный агрегатор.
+// Вместе с этим обновляем gauge-метрики, чтобы они отражали актуальное состояние памяти.
 func (s *RingBufferStorage) incrementBucket(second int64, query string) {
 	idx := int(second % int64(s.bucketCount))
 	bucket := s.buckets[idx]
@@ -123,8 +132,17 @@ func (s *RingBufferStorage) incrementBucket(second int64, query string) {
 		bucket.Timestamp = second
 	}
 
+	isNewQuery := s.aggregated[query] == 0
+
 	bucket.Queries[query]++
 	s.aggregated[query]++
+	s.totalEvents++
+
+	// Обновляем метрики только при появлении нового query в системе
+	if isNewQuery {
+		metrics.UniqueQueriesCount.Set(float64(len(s.aggregated)))
+	}
+	metrics.TotalEventsCount.Set(float64(s.totalEvents))
 }
 
 func (s *RingBufferStorage) moveToNewBucket(newSecond int64) {
@@ -141,6 +159,7 @@ func (s *RingBufferStorage) clearBucket(bucket *Bucket) {
 	if bucket.Timestamp == -1 {
 		return
 	}
+
 	for query, count := range bucket.Queries {
 		newVal := s.aggregated[query] - count
 		if newVal <= 0 {
@@ -148,7 +167,13 @@ func (s *RingBufferStorage) clearBucket(bucket *Bucket) {
 		} else {
 			s.aggregated[query] = newVal
 		}
+		s.totalEvents -= int64(count)
 	}
+
+	// Обновляем метрики после очистки - показываем реальное состояние памяти
+	metrics.UniqueQueriesCount.Set(float64(len(s.aggregated)))
+	metrics.TotalEventsCount.Set(float64(s.totalEvents))
+
 	bucket.Timestamp = -1
 }
 
@@ -176,7 +201,14 @@ func (s *RingBufferStorage) copyTopLocked(limit int) []string {
 	return result
 }
 
+// rebuildCache - самая тяжелая операция в системе.
+// Измеряем её длительность через гистограмму, чтобы вовремя заметить деградацию.
 func (s *RingBufferStorage) rebuildCache(limit int) []string {
+	start := time.Now()
+	defer func() {
+		metrics.CacheRebuildDuration.Observe(time.Since(start).Seconds())
+	}()
+
 	s.mu.Lock()
 
 	// Очищаем устаревшие бакеты перед агрегацией

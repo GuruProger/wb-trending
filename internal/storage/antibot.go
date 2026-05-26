@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/GuruProger/wb-trending/internal/metrics"
 	lru "github.com/hashicorp/golang-lru/v2/expirable"
 )
 
@@ -61,6 +62,9 @@ func (ab *AntiBot) Allow(userID, query string) bool {
 			lastRefill: time.Now(),
 		}
 		ab.cache.Add(key, bucket)
+
+		// Обновляем метрику размера кэша при добавлении новой записи
+		metrics.AntiBotCacheSize.Set(float64(ab.cache.Len()))
 	}
 
 	bucket.mu.Lock()
@@ -86,6 +90,7 @@ func (ab *AntiBot) Allow(userID, query string) bool {
 	}
 
 	ab.blockedRequests.Add(1)
+	metrics.AntiBotBlockedTotal.Inc()
 	return false
 }
 

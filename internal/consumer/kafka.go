@@ -6,6 +6,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/GuruProger/wb-trending/internal/metrics"
 	"github.com/GuruProger/wb-trending/internal/models"
 	"github.com/GuruProger/wb-trending/internal/storage"
 	"github.com/segmentio/kafka-go"
@@ -25,7 +26,6 @@ func NewKafkaConsumer(brokers []string, topic, groupID string, store storage.Tre
 		MaxBytes: 10e6,            // Максимальный размер батча (10MB)
 		MaxWait:  1 * time.Second, // Максимальное время ожидания батча
 	})
-
 	return &KafkaConsumer{
 		reader:  reader,
 		storage: store,
@@ -36,7 +36,6 @@ func NewKafkaConsumer(brokers []string, topic, groupID string, store storage.Tre
 // Блокирует выполнение до вызова Stop или отмены контекста.
 func (c *KafkaConsumer) Start(ctx context.Context) error {
 	log.Println("Kafka consumer запущен")
-
 	for {
 		msg, err := c.reader.ReadMessage(ctx)
 		if err != nil {
@@ -52,12 +51,23 @@ func (c *KafkaConsumer) Start(ctx context.Context) error {
 		var event models.SearchEvent
 		if err := json.Unmarshal(msg.Value, &event); err != nil {
 			log.Printf("Ошибка десериализации сообщения: %v", err)
+			// Считаем битые сообщения отдельно, чтобы замечать проблемы со смежным сервисом
+			metrics.EventsProcessedTotal.WithLabelValues("invalid_json").Inc()
 			continue
 		}
 
-		log.Printf("Получено событие: query=%s, user=%s", event.Query, event.UserID)
+		// Измеряем лаг - разницу между timestamp события и временем его обработки.
+		// Если эта метрика растёт, значит consumer не успевает за потоком.
+		lag := time.Since(time.UnixMilli(event.Timestamp)).Seconds()
+		if lag >= 0 {
+			metrics.KafkaMessageLag.Observe(lag)
+		}
 
+		// Замеряем время выполнения storage.Add() - самой горячей операции на пути записи.
+		// p99 этой метрики покажет, деградирует ли in-memory структура с ростом данных.
+		start := time.Now()
 		c.storage.Add(event)
+		metrics.ConsumerProcessingDuration.Observe(time.Since(start).Seconds())
 	}
 }
 

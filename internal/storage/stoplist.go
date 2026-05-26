@@ -1,6 +1,10 @@
 package storage
 
-import "sync"
+import (
+	"sync"
+
+	"github.com/GuruProger/wb-trending/internal/metrics"
+)
 
 // StopList хранит список заблокированных поисковых запросов.
 // Используется для фильтрации нежелательных слов из топа.
@@ -20,6 +24,9 @@ func (s *StopList) Add(word string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.words[word] = true
+
+	// Обновляем метрику после изменения размера
+	metrics.StopListSize.Set(float64(len(s.words)))
 }
 
 // Remove удаляет слово из стоп-листа
@@ -27,6 +34,9 @@ func (s *StopList) Remove(word string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.words, word)
+
+	// Обновляем метрику после изменения размера
+	metrics.StopListSize.Set(float64(len(s.words)))
 }
 
 // IsBlocked проверяет, находится ли слово в стоп-листе
