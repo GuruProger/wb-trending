@@ -1,0 +1,145 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "WB Trending Service",
+    "tags": [
+      "trending",
+      "wildberries"
+    ],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Events Processing Rate (per second)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "rate(trending_events_processed_total[1m])",
+            "legendFormat": "{{status}}"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 0
+        }
+      },
+      {
+        "id": 2,
+        "title": "API Request Duration (p95, p99)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trending_api_request_duration_seconds_bucket[1m]))",
+            "legendFormat": "p95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, rate(trending_api_request_duration_seconds_bucket[1m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 0
+        }
+      },
+      {
+        "id": 3,
+        "title": "Storage Metrics",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "trending_storage_unique_queries",
+            "legendFormat": "Unique Queries"
+          },
+          {
+            "expr": "trending_storage_total_events",
+            "legendFormat": "Total Events"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 8
+        }
+      },
+      {
+        "id": 4,
+        "title": "Anti-Bot Cache Size",
+        "type": "singlestat",
+        "targets": [
+          {
+            "expr": "trending_antibot_cache_size",
+            "legendFormat": ""
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 12,
+          "y": 8
+        }
+      },
+      {
+        "id": 5,
+        "title": "Stop List Size",
+        "type": "singlestat",
+        "targets": [
+          {
+            "expr": "trending_stoplist_size",
+            "legendFormat": ""
+          }
+        ],
+        "gridPos": {
+          "h": 4,
+          "w": 6,
+          "x": 18,
+          "y": 8
+        }
+      },
+      {
+        "id": 6,
+        "title": "Cache Rebuild Duration (p99)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(trending_cache_rebuild_duration_seconds_bucket[1m]))",
+            "legendFormat": "p99"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 0,
+          "y": 16
+        }
+      },
+      {
+        "id": 7,
+        "title": "Kafka Message Lag (p95)",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(trending_kafka_message_lag_seconds_bucket[1m]))",
+            "legendFormat": "p95"
+          }
+        ],
+        "gridPos": {
+          "h": 8,
+          "w": 12,
+          "x": 12,
+          "y": 16
+        }
+      }
+    ],
+    "time": {
+      "from": "now-15m",
+      "to": "now"
+    },
+    "refresh": "5s"
+  }
+}
